@@ -4,7 +4,7 @@ import os
 import numpy as np
 import streamlit as st
 import streamlit.components.v1 as components
-from scipy.io import loadmat
+import h5py
 from dataclasses import dataclass
 import plotly.graph_objects as go
 import plotly.colors
@@ -80,6 +80,41 @@ def monotonic_clean(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarra
             if x[i] < current: current = x[i]
             else: keep[i] = False
     return x[keep], y[keep]
+
+def clean_monotonic_gmid(gm_id_slice: np.ndarray) -> np.ndarray:
+    """
+    Returns a boolean mask of valid indices where gm/Id is monotonically decreasing.
+    We find the peak of gm/Id, and keep only the indices from the peak to the end of the Vgs sweep.
+    Also ensures the values are positive, finite and strictly monotonic.
+    """
+    gm_id_slice = vector(gm_id_slice)
+    if gm_id_slice.size == 0:
+        return np.array([], dtype=bool)
+    
+    valid_finite = np.isfinite(gm_id_slice)
+    if not np.any(valid_finite):
+        return np.zeros_like(gm_id_slice, dtype=bool)
+        
+    peak_idx = np.argmax(np.where(valid_finite, gm_id_slice, -1.0))
+    
+    mask = np.zeros_like(gm_id_slice, dtype=bool)
+    mask[peak_idx:] = True
+    mask = mask & valid_finite & (gm_id_slice > 0)
+    
+    if np.any(mask):
+        indices = np.where(mask)[0]
+        strict_mask = np.zeros_like(gm_id_slice, dtype=bool)
+        last_val = np.inf
+        for idx in indices:
+            val = gm_id_slice[idx]
+            # Since VGS increases, gm/Id should strictly decrease after the peak
+            if val < last_val:
+                strict_mask[idx] = True
+                last_val = val
+        return strict_mask
+        
+    return mask
+
 @dataclass
 class DeviceResult:
     id_w: float
@@ -103,32 +138,58 @@ class DeviceResult:
             f"Cgd/Cgg = {self.cgd_cgg:.6g}",
         ])
 class GmIdData:
-    def __init__(self, mat_file) -> None:
-        raw = loadmat(mat_file, squeeze_me=False)
-        self.data = {k: np.asarray(v, dtype=float) for k, v in raw.items() if not k.startswith("__")}
+    def __init__(self, h5_file) -> None:
+        with h5py.File(h5_file, 'r') as f:
+            self.data = {k: np.array(f[k], dtype=float) for k in f.keys()}
         self.l = vector(self.data["L"])
         self.vds = vector(self.data["VDS"])
+        self.vsb = vector(self.data["VSB"])
 
-    def lookup_by_gm_id(self, device: str, l_index: int, gm_id: float) -> DeviceResult:
-        gm_axis = self.data[f"{device}_gm_Id"][:, l_index]
+    def get_slice(self, key: str, vds_index: int, vsb_index: int = 0) -> np.ndarray:
+        arr = self.data[key]
+        if arr.ndim == 4:
+            return arr[:, vds_index, :, vsb_index]
+        else:
+            raise ValueError(f"Data array {key} shape {arr.shape} is not a 4D array")
+
+    def lookup_by_gm_id(self, device: str, l_index: int, gm_id: float, vds_index: int, vsb_index: int = 0) -> DeviceResult:
+        gm_axis_raw = self.get_slice(f"{device}_gm_Id", vds_index, vsb_index)[:, l_index]
+        valid = clean_monotonic_gmid(gm_axis_raw)
+        gm_axis = gm_axis_raw[valid]
+        
+        id_w_axis = self.get_slice(f"{device}_Id_W", vds_index, vsb_index)[:, l_index][valid]
+        vdsat_axis = self.get_slice(f"{device}_Vdsat", vds_index, vsb_index)[:, l_index][valid]
+        vgs_vth_axis = self.get_slice(f"{device}_Vgs_Vth", vds_index, vsb_index)[:, l_index][valid]
+        gm_gds_axis = self.get_slice(f"{device}_gm_gds", vds_index, vsb_index)[:, l_index][valid]
+        ft_axis = self.get_slice(f"{device}_ft", vds_index, vsb_index)[:, l_index][valid]
+        cdd_cgg_axis = self.get_slice(f"{device}_Cdd_Cgg", vds_index, vsb_index)[:, l_index][valid]
+        cgd_cgg_axis = self.get_slice(f"{device}_Cgd_Cgg", vds_index, vsb_index)[:, l_index][valid]
+
         return DeviceResult(
-            id_w=interp1(gm_axis, self.data[f"{device}_Id_W"][:, l_index], gm_id),
+            id_w=interp1(gm_axis, id_w_axis, gm_id),
             gm_id=gm_id,
-            vdsat=interp1(gm_axis, self.data[f"{device}_Vdsat"][:, l_index], gm_id),
-            vgs_vth=interp1(gm_axis, self.data[f"{device}_Vgs_Vth"][:, l_index], gm_id),
-            gm_gds=interp1(gm_axis, self.data[f"{device}_gm_gds"][:, l_index], gm_id),
-            ft_ghz=interp1(gm_axis, self.data[f"{device}_ft"][:, l_index], gm_id) / 1e9,           
-            cdd_cgg=interp1(gm_axis, self.data[f"{device}_Cdd_Cgg"][:, l_index], gm_id),
-            cgd_cgg=interp1(gm_axis, self.data[f"{device}_Cgd_Cgg"][:, l_index], gm_id),
+            vdsat=interp1(gm_axis, vdsat_axis, gm_id),
+            vgs_vth=interp1(gm_axis, vgs_vth_axis, gm_id),
+            gm_gds=interp1(gm_axis, gm_gds_axis, gm_id),
+            ft_ghz=interp1(gm_axis, ft_axis, gm_id) / 1e9,           
+            cdd_cgg=interp1(gm_axis, cdd_cgg_axis, gm_id),
+            cgd_cgg=interp1(gm_axis, cgd_cgg_axis, gm_id),
         )
-    def lookup_by_vdsat(self, device: str, l_index: int, vdsat: float) -> DeviceResult:
-        x_raw = self.data[f"{device}_Vdsat"][:, l_index]
-        y_raw = self.data[f"{device}_gm_Id"][:, l_index]
+
+    def lookup_by_vdsat(self, device: str, l_index: int, vdsat: float, vds_index: int, vsb_index: int = 0) -> DeviceResult:
+        vdsat_axis_raw = self.get_slice(f"{device}_Vdsat", vds_index, vsb_index)[:, l_index]
+        gm_axis_raw = self.get_slice(f"{device}_gm_Id", vds_index, vsb_index)[:, l_index]
+        
+        valid = clean_monotonic_gmid(gm_axis_raw)
+        x_raw = vdsat_axis_raw[valid]
+        y_raw = gm_axis_raw[valid]
+        
         x_clean, y_clean = monotonic_clean(x_raw, y_raw)
         gm_id = interp1(x_clean, y_clean, vdsat, extrapolate=True)
-        return self.lookup_by_gm_id(device, l_index, gm_id)
-    def size_from_id(self, device: str, l_index: int, gm_id: float, drain_current_ua: float) -> str:
-        result = self.lookup_by_gm_id(device, l_index, gm_id)
+        return self.lookup_by_gm_id(device, l_index, gm_id, vds_index, vsb_index)
+
+    def size_from_id(self, device: str, l_index: int, gm_id: float, drain_current_ua: float, vds_index: int, vsb_index: int = 0) -> str:
+        result = self.lookup_by_gm_id(device, l_index, gm_id, vds_index, vsb_index)
         gm_us = gm_id * drain_current_ua
         width_um = drain_current_ua / result.id_w
         cgg_ff = gm_us / (2 * math.pi * result.ft_ghz)
@@ -158,7 +219,19 @@ plot_choices = [
 ]
 @st.cache_resource
 def load_data_from_file(uploaded_file):
-    return GmIdData(io.BytesIO(uploaded_file.getvalue()))
+    import tempfile
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".h5") as tmp:
+        tmp.write(uploaded_file.getvalue())
+        tmp_path = tmp.name
+    try:
+        data = GmIdData(tmp_path)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+    return data
+
 @st.cache_resource
 def load_local_data(path):
     return GmIdData(path)
@@ -169,19 +242,19 @@ st.sidebar.markdown("### 🧮 gm/Id Calculator")
 st.sidebar.markdown("---")
 data_source = st.sidebar.radio("请选择数据来源：", ("☁️ 云端默认数据", "📁 本地上传数据"))
 if data_source == "☁️ 云端默认数据":
-    mat_files = sorted([f for f in os.listdir(".") if f.endswith(".mat")])
-    if not mat_files:
-        st.sidebar.error("❌ 警告：未检测到任何 .mat 数据文件！")
+    h5_files = sorted([f for f in os.listdir(".") if f.endswith(".h5")])
+    if not h5_files:
+        st.sidebar.error("❌ 警告：未检测到任何 .h5 数据文件！")
         st.stop()
-    selected_mat_file = st.sidebar.selectbox("请选择云端工艺库文件：", mat_files)
-    try: data = load_local_data(selected_mat_file)
+    selected_h5_file = st.sidebar.selectbox("请选择云端工艺库文件：", h5_files)
+    try: data = load_local_data(selected_h5_file)
     except Exception as e: st.sidebar.error(f"❌ 加载失败: {str(e)}"); st.stop()
 else:
-    uploaded_file = st.sidebar.file_uploader("请选择 .mat 文件")
+    uploaded_file = st.sidebar.file_uploader("请选择 .h5 文件")
     with st.sidebar.expander("📁 上传数据格式说明", expanded=False):
         st.markdown("""
-        上传的工艺数据须为 **`.mat`** 格式，其中应包含以下自变量与参数：
-        * **自变量网格**：包涵 3 个一维自变量数组 `L`（栅长）、`VDS`（漏源电压）和 `VGS`（栅源电压）。
+        上传的工艺数据须为 **`.h5`** 格式，其中应包含以下自变量与参数：
+        * **自变量网格**：包括 4 个一维自变量数组 `L`（栅长）、`VDS`（漏源电压）、`VGS`（栅源电压）和 `VSB`（衬底电压）。
         * **器件参数矩阵**：包含 NMOS 与 PMOS 两类器件，每类器件对应 8 个二维参数矩阵，其矩阵维度应与扫描网格一致。
         """)
     if uploaded_file is not None: data = load_data_from_file(uploaded_file)
@@ -191,22 +264,40 @@ if "l_index" not in st.session_state or st.session_state["l_index"] >= len(l_opt
     st.session_state["l_index"] = 0
     default_l = l_options[0]
     st.session_state["sidebar_l"] = default_l
-    st.session_state["NCH3_sz_l"] = default_l
-    st.session_state["PCH3_sz_l"] = default_l
+    st.session_state["N_sz_l"] = default_l
+    st.session_state["P_sz_l"] = default_l
 def update_l_globally(src_key):
     val = st.session_state[src_key]
     idx = l_options.index(val)
     st.session_state["l_index"] = idx
     st.session_state["sidebar_l"] = val
-    st.session_state["NCH3_sz_l"] = val
-    st.session_state["PCH3_sz_l"] = val
+    st.session_state["N_sz_l"] = val
+    st.session_state["P_sz_l"] = val
 
 st.sidebar.select_slider("选择 L", options=l_options, key="sidebar_l", on_change=update_l_globally, args=("sidebar_l",))
 l_index = st.session_state["l_index"]
 vds_options = [f"{x:.2f} V" for x in data.vds]
-# Vds 选择框（展示参考用；数据已按 Vds 预处理，此处暂不切片）
-st.sidebar.selectbox("选择 Vds", vds_options)
-st.sidebar.info(f"🚀 **当前工艺库：**\n`{selected_mat_file if data_source == '☁️ 云端默认数据' else uploaded_file.name}`")
+if "vds_index" not in st.session_state or st.session_state["vds_index"] >= len(vds_options):
+    st.session_state["vds_index"] = 0
+
+def update_vds_globally():
+    val = st.session_state["sidebar_vds"]
+    st.session_state["vds_index"] = vds_options.index(val)
+
+st.sidebar.selectbox("选择 Vds", vds_options, key="sidebar_vds", on_change=update_vds_globally)
+vds_index = st.session_state["vds_index"]
+
+vsb_options = [f"{x:.2f} V" for x in data.vsb]
+if "vsb_index" not in st.session_state or st.session_state["vsb_index"] >= len(vsb_options):
+    st.session_state["vsb_index"] = 0
+
+def update_vsb_globally():
+    val = st.session_state["sidebar_vsb"]
+    st.session_state["vsb_index"] = vsb_options.index(val)
+
+st.sidebar.selectbox("选择 Vsb", vsb_options, key="sidebar_vsb", on_change=update_vsb_globally)
+vsb_index = st.session_state["vsb_index"]
+st.sidebar.info(f"🚀 **当前工艺库：**\n`{selected_h5_file if data_source == '☁️ 云端默认数据' else uploaded_file.name}`")
 st.sidebar.markdown("---")
 st.sidebar.markdown("""
 <div style="font-size: 0.75rem; color: #6b7280; line-height: 1.4;">
@@ -254,11 +345,11 @@ def render_device_row(device_code, device_name):
                     if lookup_mode == "gm/Id":
                         val = st.number_input("输入 gm/Id", value=st.session_state[gm_key], step=1.0, key=f"{device_code}_temp_gm")
                         st.session_state[gm_key] = val
-                        res = data.lookup_by_gm_id(device_code, l_index, val)
+                        res = data.lookup_by_gm_id(device_code, l_index, val, vds_index, vsb_index)
                     else:
                         val = st.number_input("输入 Vdsat", value=st.session_state[vdsat_key], step=0.05, key=f"{device_code}_temp_vdsat")
                         st.session_state[vdsat_key] = val
-                        res = data.lookup_by_vdsat(device_code, l_index, val)
+                        res = data.lookup_by_vdsat(device_code, l_index, val, vds_index, vsb_index)
                 except Exception as e:
                     st.error(str(e))
                     res = None
@@ -274,7 +365,7 @@ def render_device_row(device_code, device_name):
                 
             try:
                 if res is not None:
-                    size_res = data.size_from_id(device_code, l_index, res.gm_id, size_id)
+                    size_res = data.size_from_id(device_code, l_index, res.gm_id, size_id, vds_index, vsb_index)
                     st.code(size_res)
                 else:
                     st.warning("⚠️ 请在左侧输入/计算有效的 gm/Id 或 Vdsat")
@@ -322,9 +413,18 @@ def render_device_row(device_code, device_name):
         colors = [palette[k % len(palette)] for k in range(len(indices))]
         for color, i in zip(colors, indices):
             l_val = data.l[i]
-            y_data = data.data[real_y_key][:, i] * scale_y  # 统一用 scale_y 做单位转换
+            x_raw = data.get_slice(real_x_key, vds_index, vsb_index)[:, i]
+            y_raw = data.get_slice(real_y_key, vds_index, vsb_index)[:, i] * scale_y
+            
+            # 过滤无效点：即管子彻底关断（gm_Id<=0 或非单调漏电回线）时的无意义数据点，避免出现双值函数和水平拖尾线
+            gmid_slice = data.get_slice(f"{device_code}_gm_Id", vds_index, vsb_index)[:, i]
+            valid_mask = clean_monotonic_gmid(gmid_slice) & (np.isfinite(x_raw)) & (np.isfinite(y_raw))
+            
+            x_data = x_raw[valid_mask]
+            y_data = y_raw[valid_mask]
+            
             fig.add_trace(go.Scatter(
-                x=data.data[real_x_key][:, i], y=y_data, mode='lines',
+                x=x_data, y=y_data, mode='lines',
                 name=f"{l_val * 1e6:.2f} um", line=dict(color=color, width=2.5),
                 hovertemplate=f"L={l_val * 1e6:.2f} um : %{{y:.2f}}<extra></extra>"
             ))
@@ -344,5 +444,5 @@ def render_device_row(device_code, device_name):
 # ================================
 # 页面执行
 # ================================
-render_device_row("NCH3", "NMOS")
-render_device_row("PCH3", "PMOS")
+render_device_row("N", "NMOS")
+render_device_row("P", "PMOS")
