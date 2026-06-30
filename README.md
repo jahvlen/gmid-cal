@@ -87,7 +87,7 @@ streamlit run gmid_cal.py
 
 ### 3. 自动计算的派生参数（共 16 个，每个器件 8 个）
 
-数据转换脚本 [aRead.py]会根据上面的原始数据，自动在 Python 侧计算并写入以下 8 个专门用于网页可视化的派生 4D 数据集：
+数据转换脚本 [aRead.py]会根据上面的原始数据，计算并写入以下 8 个专门用于网页可视化的派生 4D 数据集：
 
 | 变量名（以 NMOS 为例） | 对应公式 | 含义 |
 | :--- | :--- | :--- |
@@ -104,7 +104,7 @@ streamlit run gmid_cal.py
 
 ## 📚 方法学参考
 
-本项目基于斯坦福大学 **EE214** 课程中由 **Boris Murmann（穆尔曼）教授** 提出并推广的 **gm/Id 设计方法学**。
+本项目基于斯坦福大学 **EE214** 课程中由 **Boris Murmann 教授** 提出并推广的 **gm/Id 设计方法学**。
 
 相关资料：
 - [B. Murmann, "EE214 Lecture Notes"](https://web.stanford.edu/class/ee214/)
@@ -115,7 +115,6 @@ streamlit run gmid_cal.py
 ## 🤝 贡献指南
 
 欢迎提交 Issue 或 Pull Request！
-
 
 ---
 
