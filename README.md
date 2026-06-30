@@ -12,11 +12,10 @@
 ## ✨ 功能特性
 
 - **双器件支持**：同时展示 NMOS 与 PMOS 的全套参数，界面并排对比。
-- **四维嵌套扫描支持**：严格遵循最新版 4D 参数扫描规范（$V_{GS} \rightarrow L \rightarrow V_{DS} \rightarrow V_{SB}$），全面支持衬底偏置（体效应）。
+- **四维嵌套扫描支持**：严格遵循最新版 4D 参数扫描规范 (Vgs -> L -> Vds -> Vsb)，全面支持衬底偏置（体效应）。
 - **双模式查表**：可按 `gm/Id` 或 `Vdsat` 正向查找所有小信号参数。
 - **器件尺寸计算**：根据目标 `Id`，自动反推 `W/L`、`gm`、`gds`、`Cgg`、`Cdd`、`Cgd`。
 - **8 张特性曲线**：`Id/W`、`gm/gds` 、`ft`、`Vdsat`、`Cgd/Cgg`、`Cdd/Cgg` 等，支持按 L 过滤、亚阈值区单调清洗与自定义组合。
-- **开源 HDF5 数据库**：放弃了商业闭源的 MATLAB `.mat` 格式，全链路原生支持国际开源标准的 **HDF5 (`.h5`)**，加载极速，省内存，支持惰性切片。
 - **云端 / 本地数据**：支持直接从本地上传 `.h5` 工艺库，或在服务端部署时使用内置数据。
 
 ---
@@ -61,28 +60,28 @@ streamlit run gmid_cal.py
 
 通过 [run.ocn] 仿真脚本直接导出的 20 个 4D 参数矩阵（大小为 `(VGS_len, VDS_len, L_len, VSB_len)`，NMOS 前缀为 `N_`，PMOS 前缀为 `P_`）：
 
-| 变量名（以 NMOS 为例） | 含义 | 说明 |
-| :--- | :--- | :--- |
-| `N_id` | 漏极电流 ($I_D$) | 从 DC 结果读取 |
-| `N_igd` | 栅漏漏电流 ($I_{gd}$) | 从 DC 结果读取 |
-| `N_igs` | 栅源漏电流 ($I_{gs}$) | 从 DC 结果读取 |
-| `N_vth` | 阈值电压 ($V_{th}$) | 从 DC 结果读取 |
-| `N_gm` | 跨导 ($g_m$) | 从 DC 结果读取 |
-| `N_gmb` | 体跨导 ($g_{mb}$) | 从 DC 结果读取 |
-| `N_gds` | 输出电导 ($g_{ds}$) | 从 DC 结果读取 |
-| `N_cgg` | 栅极总电容 ($C_{gg}$) | 从 DC 结果读取 |
-| `N_cgd` | 栅漏电容 ($-C_{gd}$) | 导出时自动取负为正值 |
-| `N_cgs` | 栅源电容 ($-C_{gs}$) | 导出时自动取负为正值 |
-| `N_cgb` | 栅衬电容 ($-C_{gb}$) | 导出时自动取负为正值 |
-| `N_cdd` | 漏极总电容 ($C_{dd}$) | 从 DC 结果读取 |
-| `N_cdg` | 漏栅电容 ($-C_{dg}$) | 导出时自动取负为正值 |
-| `N_css` | 源极总电容 ($C_{ss}$) | 从 DC 结果读取 |
-| `N_csg` | 源栅电容 ($-C_{sg}$) | 导出时自动取负为正值 |
-| `N_cjd` | 漏结电容 ($C_{jd}$) | 从 DC 结果读取 |
-| `N_cjs` | 源结电容 ($C_{js}$) | 从 DC 结果读取 |
-| `N_vdsat` | 饱和电压 ($V_{dsat}$) | 从 DC 结果读取 |
-| `N_id_n` | 漏极通道噪声电流密度 | 从 Noise 结果读取 |
-| `N_fn_n` | 闪烁噪声系数 (Flicker) | 从 Noise 结果读取 |
+| 变量名（以 NMOS 为例） | 含义 |
+| :--- | :--- |
+| `N_id` | 漏极电流 (Id) |
+| `N_igd` | 栅漏漏电流 (Igd) |
+| `N_igs` | 栅源漏电流 (Igs) |
+| `N_vth` | 阈值电压 (Vth) |
+| `N_gm` | 跨导 (gm) |
+| `N_gmb` | 体跨导 (gmb) |
+| `N_gds` | 输出电导 (gds) |
+| `N_cgg` | 栅极总电容 (Cgg) |
+| `N_cgd` | 栅漏电容 (-Cgd) |
+| `N_cgs` | 栅源电容 (-Cgs) |
+| `N_cgb` | 栅衬电容 (-Cgb) |
+| `N_cdd` | 漏极总电容 (Cdd) |
+| `N_cdg` | 漏栅电容 (-Cdg) |
+| `N_css` | 源极总电容 (Css) |
+| `N_csg` | 源栅电容 (-Csg) |
+| `N_cjd` | 漏结电容 (Cjd) |
+| `N_cjs` | 源结电容 (Cjs) |
+| `N_vdsat` | 饱和电压 (Vdsat) |
+| `N_id_n` | 漏极通道噪声电流密度 (id_n) |
+| `N_fn_n` | 闪烁噪声系数 (fn_n) |
 
 ---
 
@@ -92,17 +91,16 @@ streamlit run gmid_cal.py
 
 | 变量名（以 NMOS 为例） | 对应公式 | 含义 |
 | :--- | :--- | :--- |
-| `N_gm_Id` | $g_m / \vert I_D \vert$ | 跨导效率 (S/A) |
-| `N_Id_W` | $\vert I_D \vert / W$ | 单位宽度电流密度 (A/m) |
-| `N_Vdsat` | $\vert V_{dsat} \vert$ | 饱和电压绝对值 (V) |
-| `N_Vgs_Vth` | $V_{GS} - V_{th}$ (P管相反) | 过载电压 (V) |
-| `N_gm_gds` | $g_m / g_{ds}$ | 本征增益 (Intrinsic Gain) |
-| `N_ft` | $g_m / (2\pi \cdot C_{gg})$ | 特征频率 (Hz，工具内换算为 GHz) |
-| `N_Cdd_Cgg` | $C_{dd} / C_{gg}$ | 漏极栅极电容比值 |
-| `N_Cgd_Cgg` | $\vert C_{gd} \vert / C_{gg}$ | 反向传输栅极电容比值 |
+| `N_gm_Id` | gm / abs(Id) | 跨导效率 (S/A) |
+| `N_Id_W` | abs(Id) / W | 单位宽度电流密度 (A/m) |
+| `N_Vdsat` | abs(Vdsat) | 饱和电压绝对值 (V) |
+| `N_Vgs_Vth` | Vgs - Vth (P管相反) | 过载电压 (V) |
+| `N_gm_gds` | gm / gds | 本征增益 (Intrinsic Gain) |
+| `N_ft` | gm / (2 * pi * Cgg) | 特征频率 (Hz，工具内换算为 GHz) |
+| `N_Cdd_Cgg` | Cdd / Cgg | 漏极栅极电容比值 |
+| `N_Cgd_Cgg` | abs(Cgd) / Cgg | 反向传输栅极电容比值 |
 
 ---
-
 
 ## 📚 方法学参考
 
@@ -114,9 +112,10 @@ streamlit run gmid_cal.py
 
 ---
 
-## 🤝 贡献
+## 🤝 贡献指南
 
 欢迎提交 Issue 或 Pull Request！
+
 
 ---
 
