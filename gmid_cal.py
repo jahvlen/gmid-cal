@@ -1,5 +1,6 @@
 import math
 import io
+import os
 import numpy as np
 import streamlit as st
 import streamlit.components.v1 as components
@@ -44,43 +45,6 @@ st.markdown("""
     .stMultiSelect div[data-baseweb="select"] > div:first-child {
         max-height: 85px; 
         overflow-y: auto;
-    }
-    
-    /* 微调 L 按钮专属样式：超美观、圆形、现代扁平风格 */
-    div[class*="dec_l"] button,
-    div[class*="inc_l"] button {
-        padding: 0px !important;
-        height: 24px !important;
-        min-height: 24px !important;
-        width: 24px !important;
-        min-width: 24px !important;
-        font-size: 14px !important;
-        font-weight: 400 !important;
-        line-height: 22px !important;
-        border-radius: 50% !important; /* 圆形按钮 */
-        border: 1px solid #e5e7eb !important;
-        background-color: #f9fafb !important;
-        color: #4b5563 !important;
-        display: inline-flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        margin-top: 32px !important; /* 刚好垂直居中对齐 38px 的输入框 */
-        transition: all 0.2s ease-in-out !important;
-        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
-    }
-    
-    div[class*="dec_l"] button:hover,
-    div[class*="inc_l"] button:hover {
-        border-color: #3b82f6 !important;
-        color: #3b82f6 !important;
-        background-color: #eff6ff !important;
-        box-shadow: 0 2px 4px rgba(59, 130, 246, 0.15) !important;
-    }
-    
-    div[class*="dec_l"] button:active,
-    div[class*="inc_l"] button:active {
-        background-color: #dbeafe !important;
-        transform: scale(0.95) !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -144,12 +108,7 @@ class GmIdData:
         self.data = {k: np.asarray(v, dtype=float) for k, v in raw.items() if not k.startswith("__")}
         self.l = vector(self.data["L"])
         self.vds = vector(self.data["VDS"])
-    def gm_id_range(self, device: str, l_index: int) -> tuple[float, float]:
-        x = self.data[f"{device}_gm_Id"][:, l_index]
-        return float(np.nanmin(x)), float(np.nanmax(x))
-    def vdsat_range(self, device: str, l_index: int) -> tuple[float, float]:
-        x = self.data[f"{device}_Vdsat"][:, l_index]
-        return float(np.nanmin(x)), float(np.nanmax(x))
+
     def lookup_by_gm_id(self, device: str, l_index: int, gm_id: float) -> DeviceResult:
         gm_axis = self.data[f"{device}_gm_Id"][:, l_index]
         return DeviceResult(
@@ -185,15 +144,17 @@ class GmIdData:
             f"Cdd = {cdd_ff:.6g} fF",
             f"Cgd = {cgd_ff:.6g} fF",
         ])
+# 每个 tuple: (显示名, X键, Y键, X轴标签, Y轴标签, Y轴缩放因子)
+# scale_y 用于单位转换，例如 ft 从 Hz 转 GHz 需要乘 1e-9
 plot_choices = [
-    ("Id/W - gm/Id", "gm_Id", "Id_W", "gm/Id (S/A)", "Id/W (A/m)"),
-    ("gm/gds - gm/Id", "gm_Id", "gm_gds", "gm/Id (S/A)", "gm/gds"),
-    ("ft - gm/Id", "gm_Id", "ft", "gm/Id (S/A)", "ft (GHz)"),
-    ("Vdsat - gm/Id", "gm_Id", "Vdsat", "gm/Id (S/A)", "Vdsat (V)"),
-    ("Cgd/Cgg - gm/Id", "gm_Id", "Cgd_Cgg", "gm/Id (S/A)", "Cgd/Cgg"),
-    ("Cdd/Cgg - gm/Id", "gm_Id", "Cdd_Cgg", "gm/Id (S/A)", "Cdd/Cgg"),
-    ("Id/W - Vdsat", "Vdsat", "Id_W", "Vdsat (V)", "Id/W (A/m)"),
-    ("gm/Id - Vgs-Vth", "Vgs_Vth", "gm_Id", "Vgs-Vth (V)", "gm/Id (S/A)"),
+    ("Id/W - gm/Id",   "gm_Id",   "Id_W",    "gm/Id (S/A)", "Id/W (A/m)", 1.0),
+    ("gm/gds - gm/Id", "gm_Id",   "gm_gds",  "gm/Id (S/A)", "gm/gds",     1.0),
+    ("ft - gm/Id",     "gm_Id",   "ft",      "gm/Id (S/A)", "ft (GHz)",   1e-9),
+    ("Vdsat - gm/Id",  "gm_Id",   "Vdsat",   "gm/Id (S/A)", "Vdsat (V)",  1.0),
+    ("Cgd/Cgg - gm/Id","gm_Id",   "Cgd_Cgg", "gm/Id (S/A)", "Cgd/Cgg",   1.0),
+    ("Cdd/Cgg - gm/Id","gm_Id",   "Cdd_Cgg", "gm/Id (S/A)", "Cdd/Cgg",   1.0),
+    ("Id/W - Vdsat",   "Vdsat",   "Id_W",    "Vdsat (V)",   "Id/W (A/m)", 1.0),
+    ("gm/Id - Vgs-Vth","Vgs_Vth", "gm_Id",   "Vgs-Vth (V)", "gm/Id (S/A)",1.0),
 ]
 @st.cache_resource
 def load_data_from_file(uploaded_file):
@@ -208,7 +169,6 @@ st.sidebar.markdown("### 🧮 gm/Id Calculator")
 st.sidebar.markdown("---")
 data_source = st.sidebar.radio("请选择数据来源：", ("☁️ 云端默认数据", "📁 本地上传数据"))
 if data_source == "☁️ 云端默认数据":
-    import os
     mat_files = sorted([f for f in os.listdir(".") if f.endswith(".mat")])
     if not mat_files:
         st.sidebar.error("❌ 警告：未检测到任何 .mat 数据文件！")
@@ -240,24 +200,12 @@ def update_l_globally(src_key):
     st.session_state["sidebar_l"] = val
     st.session_state["NCH3_sz_l"] = val
     st.session_state["PCH3_sz_l"] = val
-def change_l_by_step(step: int):
-    current_idx = st.session_state.get("l_index", 0)
-    new_idx = max(0, min(len(l_options) - 1, current_idx + step))
-    val = l_options[new_idx]
-    st.session_state["l_index"] = new_idx
-    st.session_state["sidebar_l"] = val
-    st.session_state["NCH3_sz_l"] = val
-    st.session_state["PCH3_sz_l"] = val
-sb_col1, sb_col2, sb_col3 = st.sidebar.columns([4, 1, 1])
-with sb_col1:
-    st.selectbox("选择 L", l_options, key="sidebar_l", on_change=update_l_globally, args=("sidebar_l",))
-with sb_col2:
-    st.button("−", on_click=change_l_by_step, args=(-1,), key="sb_dec_l")
-with sb_col3:
-    st.button("+", on_click=change_l_by_step, args=(1,), key="sb_inc_l")
+
+st.sidebar.select_slider("选择 L", options=l_options, key="sidebar_l", on_change=update_l_globally, args=("sidebar_l",))
 l_index = st.session_state["l_index"]
 vds_options = [f"{x:.2f} V" for x in data.vds]
-vds_index = vds_options.index(st.sidebar.selectbox("选择 Vds", vds_options))
+# Vds 选择框（展示参考用；数据已按 Vds 预处理，此处暂不切片）
+st.sidebar.selectbox("选择 Vds", vds_options)
 st.sidebar.info(f"🚀 **当前工艺库：**\n`{selected_mat_file if data_source == '☁️ 云端默认数据' else uploaded_file.name}`")
 st.sidebar.markdown("---")
 st.sidebar.markdown("""
@@ -314,20 +262,13 @@ def render_device_row(device_code, device_name):
                 except Exception as e:
                     st.error(str(e))
                     res = None
-            if res:
-                # 💡 在这里去掉了参数，直接调用 summary()
+            if res is not None:
                 st.code(res.summary())
         # --- 尺寸计算模块 ---
         with col_size:
             c_sl, c_sid = st.columns([1.3, 1])
             with c_sl:
-                c_sel_inner, c_dec_inner, c_inc_inner = st.columns([5, 1, 1])
-                with c_sel_inner:
-                    st.selectbox("栅长 L", l_options, key=f"{device_code}_sz_l", on_change=update_l_globally, args=(f"{device_code}_sz_l",))
-                with c_dec_inner:
-                    st.button("−", on_click=change_l_by_step, args=(-1,), key=f"{device_code}_dec_l")
-                with c_inc_inner:
-                    st.button("+", on_click=change_l_by_step, args=(1,), key=f"{device_code}_inc_l")
+                st.select_slider("栅长 L", options=l_options, key=f"{device_code}_sz_l", on_change=update_l_globally, args=(f"{device_code}_sz_l",))
             with c_sid:
                 size_id = st.number_input("目标 Id (uA)", value=10.0, step=1.0, key=f"{device_code}_sz_id")
                 
@@ -342,7 +283,6 @@ def render_device_row(device_code, device_name):
     # --- 3. 右侧画图大区 ---
     with col_plot:
         st.markdown("<div style='height: 0px;'></div>", unsafe_allow_html=True)
-        pc1, pc2, pc3 = st.columns([1, 0.8, 3.5])
         pc1, pc2, pc_log, pc3 = st.columns([1.1, 0.8, 0.6, 3])
         plot_name = pc1.selectbox("选择图表", [x[0] for x in plot_choices], key=f"{device_code}_plot", label_visibility="collapsed")
         
@@ -359,8 +299,14 @@ def render_device_row(device_code, device_name):
         total_l = len(data.l)
         custom_indices = []
         if l_filter_mode == "自定义":
-            selected_ls = pc3.multiselect("选几个想看的L", l_options, default=[l_options[0], l_options[-1]], key=f"{device_code}_custom_l", label_visibility="collapsed")
+            # 初始化默认值：若 session_state 中已有值则沿用，否则取首尾两条 L
+            cust_key = f"{device_code}_custom_l"
+            cached = [v for v in st.session_state.get(cust_key, []) if v in l_options]
+            init_default = cached if cached else ([l_options[0], l_options[-1]] if len(l_options) >= 2 else l_options[:1])
+            selected_ls = pc3.multiselect("选几个想看的L", l_options, default=init_default, key=cust_key, label_visibility="collapsed")
             custom_indices = [l_options.index(x) for x in selected_ls]
+            if not custom_indices:
+                pc3.warning("请至少选择一条 L 曲线")
         
         if l_filter_mode == "全部 L": indices = range(total_l)
         elif l_filter_mode == "仅当前 L": indices = [l_index]
@@ -369,19 +315,17 @@ def render_device_row(device_code, device_name):
         elif l_filter_mode == "稀疏 L": indices = range(0, total_l, max(1, total_l // 5))
         else: indices = custom_indices
         choice = next(x for x in plot_choices if x[0] == plot_name)
-        _, x_key, y_key, x_label, y_label = choice
+        _, x_key, y_key, x_label, y_label, scale_y = choice
         real_x_key, real_y_key = f"{device_code}_{x_key}", f"{device_code}_{y_key}"
         fig = go.Figure()
-        palette = plotly.colors.qualitative.D3 
+        palette = plotly.colors.qualitative.D3
         colors = [palette[k % len(palette)] for k in range(len(indices))]
         for color, i in zip(colors, indices):
             l_val = data.l[i]
-            y_data = data.data[real_y_key][:, i]
-            if real_y_key.endswith("_ft"): y_data = y_data / 1e9
-                
+            y_data = data.data[real_y_key][:, i] * scale_y  # 统一用 scale_y 做单位转换
             fig.add_trace(go.Scatter(
                 x=data.data[real_x_key][:, i], y=y_data, mode='lines',
-                name=f"{l_val * 1e6:.2f} um", line=dict(color=color, width=2.5), 
+                name=f"{l_val * 1e6:.2f} um", line=dict(color=color, width=2.5),
                 hovertemplate=f"L={l_val * 1e6:.2f} um : %{{y:.2f}}<extra></extra>"
             ))
         
