@@ -1,0 +1,146 @@
+; ==============================================================================
+; === 极简优化版：单次 4D 嵌套参数化扫描 (Vgs, L, Vds, Vsb) 与全参数导出 ===
+; ==============================================================================
+
+; 1. 环境与路径
+design_dir="./run/design/netlist"
+modelFile = list("./run/models/x.lib" "tt")
+
+n_prefix = "n33_"    ; N管文件名前缀
+p_prefix = "p33_"    ; P管文件名前缀
+out_folder = "./run/xx"
+
+; 2. 器件 Instance 与 初始静态偏置值
+inst_n = "N1"
+inst_p = "P1"
+vdd_init = 3.3
+vds_init = 0.3
+vgs_init = 0.8
+w_init   = 5u
+l_init   = 350n
+
+; ==============================================================================
+; 【扫描范围与数据量设置】
+; ==============================================================================
+; L 扫描列表 (18个点)
+L_list = list(0.35u 0.4u 0.5u 0.6u 0.7u 0.8u 0.9u 1.0u 1.2u 1.4u 1.6u 1.8u 2.0u 2.2u 2.4u 2.6u 2.8u 3u)
+
+; VGS 扫描精度 (步长 0.01V)
+vgs_start = 0.0
+vgs_stop  = vdd_init
+vgs_step  = 0.01  
+
+; VDS 扫描列表 (初步验证建议扫 2-3 个点以保证速度，如需要可自行在此添加更多值)
+vds_start = 0.1
+vds_stop  = 0.6
+vds_step  = 0.05
+vds_list = nil
+for(i 0 round((vds_stop - vds_start)/vds_step) vds_list = append1(vds_list (vds_start + i * vds_step))) 
+
+
+; VSB 扫描列表 (默认只扫一个 0.0V 偏置，可在此添加更多偏置电压)
+vsb_list  = list(0 0.2 0.4) 
+
+; ------------------------------------------------------------------------------
+; === [执行区] 核心仿真逻辑 ====================================================
+; ------------------------------------------------------------------------------
+envSetVal("spectre.envOpts" "controlMode" 'string "batch")
+
+pi = 3.141592653589793
+simulator('spectre)
+design(design_dir)
+resultsDir("./run/psf")
+
+
+desVar("VDD" vdd_init)
+desVar("Vds" vds_init)
+desVar("Vgs" vgs_init)
+desVar("W" w_init)
+desVar("L" l_init)
+desVar("Vsb" 0)
+
+envOption('analysisOrder list("dc" "noise")) 
+op_params = "id igd igs vth gm gmb gds cgg cgd cgs cgb cdd cdg css csg cjd cjs vdsat"
+saveOpPoint(inst_n ?operatingPoints op_params)
+saveOpPoint(inst_p ?operatingPoints op_params)
+temp(27) 
+
+sh(strcat("mkdir -p " out_folder))
+
+printf("\n======================================================\n")
+printf("--> 启动 4D 嵌套参数化扫描 (主: Vgs, 参: L, 参: Vds, 参: Vsb)...\n")
+printf("======================================================\n")
+analysis('dc ?saveOppoint t ?param "Vgs" ?start sprintf(nil "%g" vgs_start) ?stop sprintf(nil "%g" vgs_stop) ?step sprintf(nil "%g" vgs_step))
+analysis('noise ?freq 1 ?param "Vgs" ?start sprintf(nil "%g" vgs_start) ?stop sprintf(nil "%g" vgs_stop) ?step sprintf(nil "%g" vgs_step) ?oprobe "Vnoi")
+
+; 嵌套参数化扫描 (Vsb -> Vds -> L -> Vgs)
+paramAnalysis("Vsb" ?values vsb_list
+    paramAnalysis("Vds" ?values vds_list
+        paramAnalysis("L" ?values L_list)
+    )
+)
+paramRun()      
+selectResult('dc)
+
+procedure( export_gmid_data(inst is_p prefix)
+    let((id igd igs vth gm gmb gds cgg cgd cgs cgb cdd cdg css csg cjd cjs vdsat id_n fn_n)
+        printf("--> 正在使用 ocnPrint 导出 %s 晶体管原始数据...\n" prefix)
+        
+        ; 1. 读取 DC 仿真结果
+        selectResult('dc)
+        id    = OS(inst "id")
+        igd   = OS(inst "igd")
+        igs   = OS(inst "igs")
+        vth   = OS(inst "vth")
+        gm    = OS(inst "gm")
+        gmb   = OS(inst "gmb")
+        gds   = OS(inst "gds")
+        cgg   = OS(inst "cgg")
+        cgd   = -OS(inst "cgd")
+        cgs   = -OS(inst "cgs")
+        cgb   = -OS(inst "cgb")
+        cdd   = OS(inst "cdd")
+        cdg   = -OS(inst "cdg")
+        css   = OS(inst "css")
+        csg   = -OS(inst "csg")
+        cjd   = OS(inst "cjd")
+        cjs   = OS(inst "cjs")
+        vdsat = OS(inst "vdsat") 
+        
+        ; 2. 读取 Noise 仿真结果
+        selectResult('noise)
+        id_n  = VNPP(inst "id")
+        fn_n  = VNPP(inst "fn")
+        
+        ; 3. 导出指定的 raw 参数
+        ocnPrint(?output strcat(out_folder "/" prefix "id.csv")      ?numberNotation 'scientific id)
+        ocnPrint(?output strcat(out_folder "/" prefix "igd.csv")     ?numberNotation 'scientific igd)
+        ocnPrint(?output strcat(out_folder "/" prefix "igs.csv")     ?numberNotation 'scientific igs)
+        ocnPrint(?output strcat(out_folder "/" prefix "vth.csv")     ?numberNotation 'scientific vth)
+        ocnPrint(?output strcat(out_folder "/" prefix "gm.csv")      ?numberNotation 'scientific gm)
+        ocnPrint(?output strcat(out_folder "/" prefix "gmb.csv")     ?numberNotation 'scientific gmb)
+        ocnPrint(?output strcat(out_folder "/" prefix "gds.csv")     ?numberNotation 'scientific gds)
+        ocnPrint(?output strcat(out_folder "/" prefix "cgg.csv")     ?numberNotation 'scientific cgg)
+        ocnPrint(?output strcat(out_folder "/" prefix "cgd.csv")     ?numberNotation 'scientific cgd)
+        ocnPrint(?output strcat(out_folder "/" prefix "cgs.csv")     ?numberNotation 'scientific cgs)
+        ocnPrint(?output strcat(out_folder "/" prefix "cgb.csv")     ?numberNotation 'scientific cgb)
+        ocnPrint(?output strcat(out_folder "/" prefix "cdd.csv")     ?numberNotation 'scientific cdd)
+        ocnPrint(?output strcat(out_folder "/" prefix "cdg.csv")     ?numberNotation 'scientific cdg)
+        ocnPrint(?output strcat(out_folder "/" prefix "css.csv")     ?numberNotation 'scientific css)
+        ocnPrint(?output strcat(out_folder "/" prefix "csg.csv")     ?numberNotation 'scientific csg)
+        ocnPrint(?output strcat(out_folder "/" prefix "cjd.csv")     ?numberNotation 'scientific cjd)
+        ocnPrint(?output strcat(out_folder "/" prefix "cjs.csv")     ?numberNotation 'scientific cjs)
+        ocnPrint(?output strcat(out_folder "/" prefix "vdsat.csv")   ?numberNotation 'scientific vdsat)
+        ocnPrint(?output strcat(out_folder "/" prefix "id_n.csv")    ?numberNotation 'scientific id_n)
+        ocnPrint(?output strcat(out_folder "/" prefix "fn_n.csv")    ?numberNotation 'scientific fn_n)
+        
+        printf("--> %s 的 20 个原始参数 CSV 表导出完毕。\n" prefix)
+    )
+)
+
+export_gmid_data(inst_n nil n_prefix)
+export_gmid_data(inst_p t p_prefix)
+
+printf("\n======================================================\n")
+printf(" 【大功告成】单次嵌套扫描已完成，20 个参数的 CSV 数据已导出！\n")
+printf("======================================================\n")
