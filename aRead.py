@@ -3,28 +3,31 @@ import re
 import numpy as np
 import h5py
 
-FOLDER_PATH = Path("./xx")
+# 定义输入 CSV 文件的文件夹路径和输出的 HDF5 文件路径
+FOLDER_PATH = Path("./x")
 OUTPUT_FILE = Path("m33.h5")
 
+# 匹配浮点数（包括可选的正负号、小数点以及科学计数法 e/E）的正则表达式
 FLOAT_PATTERN = re.compile(r"[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?")
 
 
 def numbers_in_line(line: str) -> list[float]:
-    """Return all numeric tokens in a line."""
+    """提取单行文本中的所有数值，并将其转换为浮点数列表。"""
     return [float(x) for x in FLOAT_PATTERN.findall(line)]
 
 
-def matlab_str2num_line(line: str) -> list[float]:
+def parse_numeric_line(line: str) -> list[float]:
     """
-    Approximate MATLAB str2num for these Spectre text exports.
+    解析只包含数值和空格的数据行。
 
-    Header lines contain names such as Vgs, Vds, OS(...), so MATLAB returns [].
-    Numeric data rows contain only floats and whitespace.
+    表头或描述行一般包含变量名（如 Vgs, Vds, OS(...)），此时返回空列表 []。
+    数据行则仅包含浮点数值和空白字符。
     """
     stripped = line.strip()
     if not stripped:
         return []
 
+    # 检查这一行是否只包含数字、小数点、科学计数符号、正负号以及空白字符
     if re.fullmatch(r"[\s+\-.0-9eE]+", stripped) is None:
         return []
 
@@ -33,9 +36,12 @@ def matlab_str2num_line(line: str) -> list[float]:
 
 def parse_csv(file_path: Path) -> tuple[dict[str, np.ndarray], np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Generic coordinate-based multi-dimensional parser.
-    Supports 3D and 4D parameters dynamically.
+    通用的多维仿真数据解析器。
+    
+    能够识别块头部标签（如 L=xxx, Vds=xxx, Vsb=xxx）以及列标题（如 Vds 0.1 0.5 1.0），
+    并将所有分散的数据点重构成完整的 4D 数组，其维度顺序为: (VGS, VDS, L, VSB)。
     """
+    # 提取头部声明参数的正则表达式
     L_PATTERN = re.compile(r"\bL\s*=\s*([-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?)", re.IGNORECASE)
     VDS_PATTERN = re.compile(r"\bVds\s*=\s*([-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?)", re.IGNORECASE)
     VSB_PATTERN = re.compile(r"\bVsb\s*=\s*([-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?)", re.IGNORECASE)
@@ -44,9 +50,9 @@ def parse_csv(file_path: Path) -> tuple[dict[str, np.ndarray], np.ndarray, np.nd
     current_Vds = 0.0
     current_Vsb = 0.0
     
-    col_var = None
-    column_values = []
-    data_points = []
+    col_var = None          # 标记哪一个变量是作为各列的自变量（L、Vds 或 Vsb）
+    column_values = []      # 存储各列对应的自变量坐标值
+    data_points = []        # 存放临时解析出的元组: (vgs, vds, l, vsb, value)
 
     with file_path.open("r", encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -54,10 +60,10 @@ def parse_csv(file_path: Path) -> tuple[dict[str, np.ndarray], np.ndarray, np.nd
             if not line_str:
                 continue
 
-            # Check block headers
-            l_match = L_PATTERN.search(line_str)
-            if l_match:
-                current_L = float(l_match.group(1))
+            # 1. 匹配块头部的参数声明（按物理扫描维度从外层到内层：Vsb -> Vds -> L）
+            vsb_match = VSB_PATTERN.search(line_str)
+            if vsb_match:
+                current_Vsb = float(vsb_match.group(1))
                 continue
 
             vds_match = VDS_PATTERN.search(line_str)
@@ -65,12 +71,12 @@ def parse_csv(file_path: Path) -> tuple[dict[str, np.ndarray], np.ndarray, np.nd
                 current_Vds = float(vds_match.group(1))
                 continue
 
-            vsb_match = VSB_PATTERN.search(line_str)
-            if vsb_match:
-                current_Vsb = float(vsb_match.group(1))
+            l_match = L_PATTERN.search(line_str)
+            if l_match:
+                current_L = float(l_match.group(1))
                 continue
 
-            # Check column headers (starts with L, Vds, or Vsb, followed by numbers)
+            # 2. 匹配列标题行（例如: Vds  0.1  0.5  1.0）
             col_header_match = re.match(r"^(L|Vds|Vsb)\s+([\s+\-.0-9eE]+)$", line_str, re.IGNORECASE)
             if col_header_match:
                 var_name = col_header_match.group(1).lower()
@@ -83,16 +89,16 @@ def parse_csv(file_path: Path) -> tuple[dict[str, np.ndarray], np.ndarray, np.nd
                 column_values = numbers_in_line(col_header_match.group(2))
                 continue
 
-            # Parse data row
-            row = matlab_str2num_line(line_str)
+            # 3. 解析数值数据行
+            row = parse_numeric_line(line_str)
             if not row:
                 continue
 
-            vgs = row[0]
+            vgs = row[0] # 首列通常是 Vgs 自变量
             for idx, val in enumerate(row[1:]):
                 col_val = column_values[idx] if idx < len(column_values) else 0.0
                 
-                # Combine block coordinates and column coordinate
+                # 组合当前的 4D 自变量坐标 (L, Vds, Vsb)
                 coords = {"L": current_L, "Vds": current_Vds, "Vsb": current_Vsb}
                 if col_var in coords:
                     coords[col_var] = col_val
@@ -100,162 +106,163 @@ def parse_csv(file_path: Path) -> tuple[dict[str, np.ndarray], np.ndarray, np.nd
                 data_points.append((vgs, coords["Vds"], coords["L"], coords["Vsb"], val))
 
     if not data_points:
-        raise ValueError(f"{file_path.name}: found no numeric data")
+        raise ValueError(f"{file_path.name}: 未找到有效的数值数据")
 
-    # Extract unique coordinates
+    # 4. 获取各个维度去重并排序后的唯一坐标值列表
     vgs_coords = np.unique([p[0] for p in data_points])
     vds_coords = np.unique([p[1] for p in data_points])
     l_coords = np.unique([p[2] for p in data_points])
     vsb_coords = np.unique([p[3] for p in data_points])
 
+    # 建立自变量坐标值到网格坐标索引的快速映射表
     vgs_map = {val: idx for idx, val in enumerate(vgs_coords)}
     vds_map = {val: idx for idx, val in enumerate(vds_coords)}
     l_map = {val: idx for idx, val in enumerate(l_coords)}
     vsb_map = {val: idx for idx, val in enumerate(vsb_coords)}
 
-    # Fill the 4D array: (VGS, VDS, L, VSB)
-    data_4d = np.zeros((len(vgs_coords), len(vds_coords), len(l_coords), len(vsb_coords)))
+    # 5. 构建并填充 4D 数组，形状依次为: (VGS 长度, L 长度, VDS 长度, VSB 长度)
+    data_4d = np.zeros((len(vgs_coords), len(l_coords), len(vds_coords), len(vsb_coords)))
     for vgs, vds, l, vsb, val in data_points:
-        data_4d[vgs_map[vgs], vds_map[vds], l_map[l], vsb_map[vsb]] = val
+        data_4d[vgs_map[vgs], l_map[l], vds_map[vds], vsb_map[vsb]] = val
 
     return {"Data": data_4d, "VGS": vgs_coords, "VDS": vds_coords, "L": l_coords, "VSB": vsb_coords}, vgs_coords, vds_coords, l_coords, vsb_coords
 
 
-def rename_for_legacy_mat(old_name: str) -> str:
-    new_name = re.sub(r"^n\d+_phase2_", "Vds_N_", old_name)
-    new_name = re.sub(r"^p\d+_phase2_", "Vds_P_", new_name)
-    new_name = re.sub(r"^n\d+_", "N_", new_name)
-    new_name = re.sub(r"^p\d+_", "P_", new_name)
-    return new_name
-
-
-def build_output(all_data: dict[str, np.ndarray | dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
-    out_data: dict[str, np.ndarray] = {}
-
-    for old_name, value in all_data.items():
-        new_name = rename_for_legacy_mat(old_name)
-
-        if isinstance(value, dict):
-            # 直接保存为 4D 数组，不再扁平化为 2D
-            out_data[new_name] = value["Data"]
-        else:
-            out_data[new_name] = value
-
-    return out_data
-
-
-def save_hdf5(file_path: Path, data: dict[str, np.ndarray]) -> None:
-    with h5py.File(file_path, "w") as f:
-        for name, value in data.items():
-            f.create_dataset(name, data=value)
-
-
 def main() -> None:
+    # 1. 查找并加载文件夹中的 CSV 数据文件
     csv_files = sorted(FOLDER_PATH.glob("*.csv"))
     if not csv_files:
-        raise FileNotFoundError(f"No CSV files found in {FOLDER_PATH}")
+        raise FileNotFoundError(f"在 {FOLDER_PATH} 目录中未找到任何 CSV 文件")
 
-    all_data: dict[str, np.ndarray | dict[str, np.ndarray]] = {}
+    all_data: dict[str, np.ndarray] = {}
     global_vgs: np.ndarray | None = None
     global_vds: np.ndarray | None = None
     global_vsb: np.ndarray | None = None
-    all_l_values: list[np.ndarray] = []
-    all_vsb_values: list[np.ndarray] = []
+    global_l: np.ndarray | None = None
 
+    # 循环遍历每个 CSV，提取其自变量坐标轴及仿真参数数据
     for file_path in csv_files:
         parsed, vgs, vds, l_values, vsb_values = parse_csv(file_path)
         name = file_path.stem
-        all_data[name] = parsed
+        all_data[name] = parsed["Data"]
 
-        if isinstance(parsed, dict):
-            if global_vgs is None:
-                global_vgs = vgs
-            if global_vds is None:
-                global_vds = vds
-            if global_vsb is None:
-                global_vsb = vsb_values
-            all_l_values.append(l_values)
-            all_vsb_values.append(vsb_values)
-            data_shape = parsed["Data"].shape
-            print(f"成功处理数据: {file_path.name}，去列后尺寸: {data_shape[0]} x {data_shape[1]} x {data_shape[2]} x {data_shape[3]}")
-
-    all_data["VGS"] = global_vgs if global_vgs is not None else np.asarray([])
-    all_data["VDS"] = global_vds if global_vds is not None else np.asarray([])
-    all_data["L"] = np.unique(np.concatenate(all_l_values)) if all_l_values else np.asarray([])
-    all_data["VSB"] = np.unique(np.concatenate(all_vsb_values)) if all_vsb_values else np.asarray([0.0])
-
-    # 2. 计算派生参数 (由 Python 中心化处理，以提高 Ocean 导出速度)
-    W = 5.0e-6  # 器件仿真宽度 W = 5u
-    for prefix in ["n33_", "p33_"]:
-        is_p = (prefix == "p33_")
+        # 直接记录第一个文件的坐标网格作为全局坐标轴（因为所有仿真参数文件共享相同的扫描自变量轴）
+        if global_vgs is None:
+            global_vgs = vgs
+        if global_vds is None:
+            global_vds = vds
+        if global_l is None:
+            global_l = l_values
+        if global_vsb is None:
+            global_vsb = vsb_values
         
-        # 提取关键自变量
-        vgs_val = all_data["VGS"]
-        vds_val = all_data["VDS"]
-        l_val = all_data["L"]
-        vsb_val = all_data["VSB"]
+        data_shape = parsed["Data"].shape
+        # 对齐打印输出：文件名占16位字符并左对齐，后面的维度数值采用右对齐
+        print(f"成功处理数据: {file_path.name:<16}，去列后尺寸: {data_shape[0]:>3} x {data_shape[1]:>2} x {data_shape[2]:>2} x {data_shape[3]:>2}")
+
+    # 合并全局坐标轴
+    vgs_axis = global_vgs if global_vgs is not None else np.asarray([])
+    vds_axis = global_vds if global_vds is not None else np.asarray([])
+    l_axis = global_l if global_l is not None else np.asarray([])
+    vsb_axis = global_vsb if global_vsb is not None else np.asarray([0.0])
+
+    # 准备写入 HDF5 的字典，键名为路径，例如 "/VGS", "/Raw/N_cdd", "/N_gm_Id"
+    output_hdf5_data = {
+        "/VGS": vgs_axis,
+        "/VDS": vds_axis,
+        "/L": l_axis,
+        "/VSB": vsb_axis
+    }
+
+    # 2. 计算派生参数 (在 Python 中集中向量化计算)
+    # 动态搜集所有仿真参数文件包含的器件前缀 (如 n33_, p33_, n18_ 等)
+    prefixes = set()
+    for name in all_data.keys():
+        match = re.match(r"^(n\d*|p\d*)_", name, re.IGNORECASE)
+        if match:
+            prefixes.add(match.group(0).lower()) # 统一转小写进行后续匹配
+
+    W = 5.0e-6  # 器件仿真宽度 W = 5u (用于换算单位宽度电流)
+    for prefix in sorted(prefixes):
+        is_p = prefix.startswith("p")
+        target_prefix = "P_" if is_p else "N_"
         
-        # 提取原始 4D 矩阵数据
+        # 提取并准备原始 4D 数组数据进行计算
         try:
-            id_arr = all_data[prefix + "id"]["Data"]
-            gm_arr = all_data[prefix + "gm"]["Data"]
-            cgg_arr = all_data[prefix + "cgg"]["Data"]
-            cdd_arr = all_data[prefix + "cdd"]["Data"]
-            cgd_arr = all_data[prefix + "cgd"]["Data"]
-            gds_arr = all_data[prefix + "gds"]["Data"]
-            vth_arr = all_data[prefix + "vth"]["Data"]
-            vdsat_arr = all_data[prefix + "vdsat"]["Data"]
+            id_arr = all_data[prefix + "id"]
+            gm_arr = all_data[prefix + "gm"]
+            cgg_arr = all_data[prefix + "cgg"]
+            cdd_arr = all_data[prefix + "cdd"]
+            cgd_arr = all_data[prefix + "cgd"]
+            gds_arr = all_data[prefix + "gds"]
+            vth_arr = all_data[prefix + "vth"]
+            vdsat_arr = all_data[prefix + "vdsat"]
         except KeyError as e:
             print(f"警告：未找到原始参数 {e}，跳过该器件的派生计算")
             continue
         
-        # 使用 numpy errstate 避免除以 0 的警告
+        # 使用 numpy errstate 屏蔽除以 0 以及无效运算的警告
         with np.errstate(divide='ignore', invalid='ignore'):
-            # 1. gm_Id (gm / abs(id))
+            # (1) 跨导效率 gm/Id = gm / abs(Id)
             gmid_arr = np.where(id_arr != 0, gm_arr / np.abs(id_arr), 0.0)
             
-            # 2. Cdd_Cgg (cdd / cgg)
-            cdd_cgg_arr = np.where(cgg_arr != 0, cdd_arr / cgg_arr, 0.0)
-            
-            # 3. Cgd_Cgg (abs(cgd) / cgg)
-            cgd_cgg_arr = np.where(cgg_arr != 0, np.abs(cgd_arr) / cgg_arr, 0.0)
-            
-            # 4. ft (gm / (2 * pi * cgg))
+            # (2) 特征频率 ft = gm / (2 * pi * Cgg)
             ft_arr = np.where(cgg_arr != 0, gm_arr / (2 * np.pi * cgg_arr), 0.0)
             
-            # 5. Vdsat (取绝对值保证恒正)
+            # (3) 漏端本征电容比值 Cdd/Cgg
+            cdd_cgg_arr = np.where(cgg_arr != 0, cdd_arr / cgg_arr, 0.0)
+            
+            # (4) 反馈电容比值 Cgd/Cgg = abs(Cgd) / Cgg
+            cgd_cgg_arr = np.where(cgg_arr != 0, np.abs(cgd_arr) / cgg_arr, 0.0)
+            
+            # (5) 饱和压降 Vdsat (取绝对值确保正值表示)
             vdsat_val_arr = np.abs(vdsat_arr)
             
-            # 6. Vgs_Vth (NMOS: vgs - vth, PMOS: vth - vgs)
-            vgs_4d = vgs_val[:, np.newaxis, np.newaxis, np.newaxis]
+            # (6) 过驱动电压 Vov = Vgs - Vth (NMOS: vgs - vth, PMOS: vth - vgs)
+            # 通过 np.newaxis 升维，将一维 vgs 自变量广播为 4D，以对应 4D 数组中 vgs 维度的计算
+            vgs_4d = vgs_axis[:, np.newaxis, np.newaxis, np.newaxis]
             if is_p:
                 vov_arr = vth_arr - vgs_4d
             else:
                 vov_arr = vgs_4d - vth_arr
                 
-            # 7. Id_W (NMOS: id / W, PMOS: -id / W)
+            # (7) 单位宽度漏极电流 Id/W (NMOS: id/W, PMOS: -id/W，确保为正值表示)
             id_w_arr = (-id_arr if is_p else id_arr) / W
             
-            # 8. gm_gds (gm / gds)
+            # (8) 本征增益 gm/gds = gm * ro
             gmro_arr = np.where(gds_arr != 0, gm_arr / gds_arr, 0.0)
         
-        # 将计算出的 4D 派生数据存回 all_data 中以保持一致的格式
-        all_data[prefix + "gm_Id"] = {"Data": gmid_arr, "VGS": vgs_val, "VDS": vds_val, "L": l_val, "VSB": vsb_val}
-        all_data[prefix + "Cdd_Cgg"] = {"Data": cdd_cgg_arr, "VGS": vgs_val, "VDS": vds_val, "L": l_val, "VSB": vsb_val}
-        all_data[prefix + "Cgd_Cgg"] = {"Data": cgd_cgg_arr, "VGS": vgs_val, "VDS": vds_val, "L": l_val, "VSB": vsb_val}
-        all_data[prefix + "ft"] = {"Data": ft_arr, "VGS": vgs_val, "VDS": vds_val, "L": l_val, "VSB": vsb_val}
-        all_data[prefix + "Vdsat"] = {"Data": vdsat_val_arr, "VGS": vgs_val, "VDS": vds_val, "L": l_val, "VSB": vsb_val}
-        all_data[prefix + "Vgs_Vth"] = {"Data": vov_arr, "VGS": vgs_val, "VDS": vds_val, "L": l_val, "VSB": vsb_val}
-        all_data[prefix + "Id_W"] = {"Data": id_w_arr, "VGS": vgs_val, "VDS": vds_val, "L": l_val, "VSB": vsb_val}
-        all_data[prefix + "gm_gds"] = {"Data": gmro_arr, "VGS": vgs_val, "VDS": vds_val, "L": l_val, "VSB": vsb_val}
+        # 将计算出来的派生参数放在最外层（加 N_ 或 P_ 前缀）
+        output_hdf5_data[f"/{target_prefix}gm_Id"] = gmid_arr
+        output_hdf5_data[f"/{target_prefix}ft"] = ft_arr
+        output_hdf5_data[f"/{target_prefix}Cdd_Cgg"] = cdd_cgg_arr
+        output_hdf5_data[f"/{target_prefix}Cgd_Cgg"] = cgd_cgg_arr
+        output_hdf5_data[f"/{target_prefix}Vdsat"] = vdsat_val_arr
+        output_hdf5_data[f"/{target_prefix}Vgs_Vth"] = vov_arr
+        output_hdf5_data[f"/{target_prefix}Id_W"] = id_w_arr
+        output_hdf5_data[f"/{target_prefix}gm_gds"] = gmro_arr
 
-    print("\n==== 预处理完成！====")
+    # 将 40 个原始仿真参数放入 /Raw/ 组中（键名为 /Raw/N_xxx 或 /Raw/P_xxx）
+    for name, data_arr in all_data.items():
+        match = re.match(r"^(n\d*|p\d*)_(.*)$", name, re.IGNORECASE)
+        if match:
+            dev_type = "N" if match.group(1).lower().startswith("n") else "P"
+            param = match.group(2)
+            raw_path = f"/Raw/{dev_type}_{param}"
+        else:
+            raw_path = f"/Raw/{name}"
+            
+        output_hdf5_data[raw_path] = data_arr
 
-    out_data = build_output(all_data)
-    save_hdf5(OUTPUT_FILE, out_data)
+    print("\n==== 预处理与派生参数计算完成！====")
+    
+    # 3. 将扁平化组织的数据写入 HDF5 文件
+    with h5py.File(OUTPUT_FILE, "w") as f:
+        for path, val_arr in output_hdf5_data.items():
+            f.create_dataset(path, data=val_arr)
 
-    print("\n==== 智能格式转换与打包完成！====")
-    print(f"已保存至：{OUTPUT_FILE}")
+    print("\n==== 扁平化格式转换与打包完成！====")
+    print(f"数据已打包并保存至：{OUTPUT_FILE}")
 
 
 if __name__ == "__main__":

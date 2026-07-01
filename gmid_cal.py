@@ -139,8 +139,11 @@ class DeviceResult:
         ])
 class GmIdData:
     def __init__(self, h5_file) -> None:
+        self.data = {}
         with h5py.File(h5_file, 'r') as f:
-            self.data = {k: np.array(f[k], dtype=float) for k in f.keys()}
+            for k in f.keys():
+                if isinstance(f[k], h5py.Dataset):
+                    self.data[k] = np.array(f[k], dtype=float)
         self.l = vector(self.data["L"])
         self.vds = vector(self.data["VDS"])
         self.vsb = vector(self.data["VSB"])
@@ -148,7 +151,7 @@ class GmIdData:
     def get_slice(self, key: str, vds_index: int, vsb_index: int = 0) -> np.ndarray:
         arr = self.data[key]
         if arr.ndim == 4:
-            return arr[:, vds_index, :, vsb_index]
+            return arr[:, :, vds_index, vsb_index]
         else:
             raise ValueError(f"Data array {key} shape {arr.shape} is not a 4D array")
 

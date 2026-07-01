@@ -22,24 +22,24 @@ l_init   = 350n
 ; ==============================================================================
 ; 【扫描范围与数据量设置】
 ; ==============================================================================
-; L 扫描列表 (18个点)
-L_list = list(0.35u 0.4u 0.5u 0.6u 0.7u 0.8u 0.9u 1.0u 1.2u 1.4u 1.6u 1.8u 2.0u 2.2u 2.4u 2.6u 2.8u 3u)
+; L 扫描列表 (15)
+L_list = list(0.35u 0.4u 0.45u 0.5u 0.6u 0.7u 0.8u 1.0u 1.2u 1.5u 2.0u 2.5u 3.0u 4.0u 5.0u)
 
-; VGS 扫描精度 (步长 0.01V)
+; VGS 扫描精度
 vgs_start = 0.0
 vgs_stop  = vdd_init
-vgs_step  = 0.01  
+vgs_step  = 0.05
 
-; VDS 扫描列表 (初步验证建议扫 2-3 个点以保证速度，如需要可自行在此添加更多值)
-vds_start = 0.1
-vds_stop  = 0.6
-vds_step  = 0.05
+; VDS 扫描列表
+vds_start = 0
+vds_stop  = vdd_init
+vds_step  = 0.1
+
 vds_list = nil
 for(i 0 round((vds_stop - vds_start)/vds_step) vds_list = append1(vds_list (vds_start + i * vds_step))) 
 
-
-; VSB 扫描列表 (默认只扫一个 0.0V 偏置，可在此添加更多偏置电压)
-vsb_list  = list(0 0.2 0.4) 
+; VSB 扫描列表
+vsb_list  = list(0 0.2 0.4 0.6) 
 
 ; ------------------------------------------------------------------------------
 ; === [执行区] 核心仿真逻辑 ====================================================
@@ -111,6 +111,15 @@ procedure( export_gmid_data(inst is_p prefix)
         selectResult('noise)
         id_n  = VNPP(inst "id")
         fn_n  = VNPP(inst "fn")
+
+        ; 如果是 PMOS (is_p 为真)，转换电流、阈值电压和饱和压降的符号为正，方便后续计算
+        if( is_p then
+            id    = -id
+            igd   = -igd
+            igs   = -igs
+            vth   = -vth
+            vdsat = -vdsat
+        )
         
         ; 3. 导出指定的 raw 参数
         ocnPrint(?output strcat(out_folder "/" prefix "id.csv")      ?numberNotation 'scientific id)
